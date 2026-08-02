@@ -155,8 +155,9 @@
   .ticket .time{ font-size:11px; opacity:0.55; }
   .ticket .done-btn{ background:var(--success); color:#fff; border:none; border-radius:10px; padding:9px 14px; font-size:13px; font-weight:600; }
 
-  .tabs{ display:flex; gap:8px; margin-bottom:16px; }
-  .tab{ flex:1; text-align:center; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface); font-size:13px; color:var(--text-muted); }
+  .tabs{ display:flex; gap:8px; margin-bottom:16px; overflow-x:auto; scrollbar-width:none; }
+  .tabs::-webkit-scrollbar{ display:none; }
+  .tab{ flex:0 0 auto; text-align:center; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--surface); font-size:13px; color:var(--text-muted); white-space:nowrap; }
   .tab.active{ background:var(--primary-tint); color:var(--primary-dark); border-color:var(--primary); font-weight:600; }
   .empty{ text-align:center; padding:50px 20px; color:var(--text-muted); }
   .empty .e{ color:var(--text-muted); opacity:0.5; margin-bottom:12px; display:flex; justify-content:center; }
@@ -224,12 +225,24 @@
   .detail-name{ font-size:19px; font-weight:600; margin-bottom:2px; }
   .detail-baseprice{ font-size:13.5px; color:var(--text-muted); margin-bottom:20px; }
   .detail-bottombar{ position:fixed; left:0; right:0; bottom:0; max-width:480px; margin:0 auto; background:var(--surface); border-top:1px solid var(--line); padding:12px 18px; display:flex; align-items:center; gap:12px; padding-bottom:calc(12px + env(safe-area-inset-bottom,0)); box-shadow:0 -6px 20px rgba(0,0,0,0.08); }
+  .stats-range{ display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; margin-bottom:14px; scrollbar-width:none; }
+  .stats-range::-webkit-scrollbar{ display:none; }
+  .stats-range .chip{ flex:0 0 auto; }
+  .custom-range-box{ display:flex; gap:8px; align-items:center; margin-bottom:16px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:10px; }
+  .custom-range-box input[type=date]{ flex:1; background:var(--surface-2); border:1px solid var(--line); border-radius:8px; padding:8px; font-size:13px; font-family:inherit; color:var(--text); }
+  .chart-card{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:16px; }
+  .chart-card h3{ font-size:14px; margin:0 0 12px 0; font-weight:600; }
+  .chart-card canvas{ max-height:220px; }
+  .chart-empty{ text-align:center; color:var(--text-muted); font-size:13px; padding:24px 0; }
+  .img-preview{ width:72px; height:72px; border-radius:14px; overflow:hidden; background:var(--surface-2); display:flex; align-items:center; justify-content:center; flex-shrink:0; color:var(--text-muted); }
+  .img-preview img{ width:100%; height:100%; object-fit:cover; }
   .detail-qty{ display:flex; align-items:center; gap:12px; background:var(--surface-2); border-radius:12px; padding:8px 10px; }
 </style>
 </head>
 <body>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <div id="app"></div>
 <script>
 /* หมายเหตุ: เวอร์ชันนี้ใช้ localStorage ของเบราว์เซอร์ ข้อมูลไม่แชร์ข้ามอุปกรณ์ — สำหรับทดสอบ/เดโม */
@@ -363,7 +376,8 @@ let state = {
   detailItemId:null, detailSelections:{}, detailQty:1,
   editDraft:null,
   lastQueueNumber:null, lastAheadCount:0,
-  submittingOrder:false
+  submittingOrder:false,
+  statsRange:'week', statsCustomStart:'', statsCustomEnd:''
 };
 
 function saveMenu(menu){
@@ -427,6 +441,9 @@ function render(){
   const app = document.getElementById('app');
   app.innerHTML = screenHTML();
   attachEvents();
+  if(state.view==='owner-dashboard' && state.ownerTab==='stats'){
+    renderStatsCharts();
+  }
 }
 function screenHTML(){
   if(state.loading) return `<div class="center-stack"><div style="color:var(--text-muted)">กำลังโหลด...</div></div>`;
@@ -702,8 +719,8 @@ function myOrdersScreen(){
 }
 function ownerScreen(){
   const pending = state.orders.filter(o=>o.status==='pending');
-  const done = state.orders.filter(o=>o.status==='done').sort((a,b)=>b.doneAt-a.doneAt);
-  const todayRevenue = done.filter(o=>dateStr(o.doneAt)===dateStr(Date.now())).reduce((a,o)=>a+o.total,0);
+  const doneToday = state.orders.filter(o=>o.status==='done' && dateStr(o.doneAt)===dateStr(Date.now())).sort((a,b)=>b.doneAt-a.doneAt);
+  const todayRevenue = doneToday.reduce((a,o)=>a+o.total,0);
   let body = '';
   if(state.ownerTab==='pending'){
     body = pending.length===0 ? `<div class="empty"><div class="e">${I.chef}</div>ยังไม่มีออเดอร์เข้ามา</div>` :
@@ -715,11 +732,14 @@ function ownerScreen(){
         <button class="done-btn" data-done="${o.id}">เสร็จแล้ว</button></div>
       </div>`).join('') + `</div>`;
   } else if(state.ownerTab==='history'){
-    body = done.length===0 ? `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีประวัติออเดอร์</div>` :
+    body = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">แสดงเฉพาะออเดอร์ของวันนี้ · ดูย้อนหลังได้ที่แท็บ "สถิติ"</div>` +
+      (doneToday.length===0 ? `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีประวัติออเดอร์วันนี้</div>` :
       `<div class="summary-bar"><div class="sum-card"><div class="n">฿${fmt(todayRevenue)}</div><div class="l">ยอดวันนี้</div></div>
-      <div class="sum-card"><div class="n">${done.filter(o=>dateStr(o.doneAt)===dateStr(Date.now())).length}</div><div class="l">ออเดอร์วันนี้</div></div></div>
-      <div class="stack">` + done.map(o=>`<div class="hist-row"><div><div class="t1">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${o.items.map(it=>it.qty+'x '+it.name).join(', ')}</div>
-      <div class="t2">${dateStr(o.doneAt)} ${timeStr(o.doneAt)}</div></div><div class="amt">฿${fmt(o.total)}</div></div>`).join('') + `</div>`;
+      <div class="sum-card"><div class="n">${doneToday.length}</div><div class="l">ออเดอร์วันนี้</div></div></div>
+      <div class="stack">` + doneToday.map(o=>`<div class="hist-row"><div><div class="t1">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${o.items.map(it=>it.qty+'x '+it.name).join(', ')}</div>
+      <div class="t2">${dateStr(o.doneAt)} ${timeStr(o.doneAt)}</div></div><div class="amt">฿${fmt(o.total)}</div></div>`).join('') + `</div>`);
+  } else if(state.ownerTab==='stats'){
+    body = statsBodyHtml();
   } else if(state.ownerTab==='menu'){
     body = `<div class="stack">` + state.menu.map(m=>`<div class="mi-row">
       <div class="nm">${m.name}<div style="font-size:11px;color:var(--text-muted)">${m.category}${m.modifierGroups&&m.modifierGroups.length?(' · '+m.modifierGroups.length+' กลุ่มตัวเลือก'):''}</div></div>
@@ -743,6 +763,7 @@ function ownerScreen(){
     <div class="tabs">
       <div class="tab ${state.ownerTab==='pending'?'active':''}" data-tab="pending">ออเดอร์ใหม่ ${pending.length?('('+pending.length+')'):''}</div>
       <div class="tab ${state.ownerTab==='history'?'active':''}" data-tab="history">ประวัติ</div>
+      <div class="tab ${state.ownerTab==='stats'?'active':''}" data-tab="stats">สถิติ</div>
       <div class="tab ${state.ownerTab==='menu'?'active':''}" data-tab="menu">จัดการเมนู</div>
       <div class="tab ${state.ownerTab==='settings'?'active':''}" data-tab="settings">ตั้งค่า</div>
     </div>
@@ -752,6 +773,100 @@ function ownerScreen(){
 }
 
 /* ---- ตัวแก้ไขเมนู (เพิ่ม/แก้ไข) ---- */
+function statsRangeDates(){
+  const now = new Date();
+  let start, end;
+  if(state.statsRange==='week'){ start = new Date(now); start.setDate(start.getDate()-6); end = now; }
+  else if(state.statsRange==='month'){ start = new Date(now); start.setDate(start.getDate()-29); end = now; }
+  else if(state.statsRange==='year'){ start = new Date(now); start.setMonth(start.getMonth()-11); end = now; }
+  else if(state.statsRange==='custom'){
+    start = state.statsCustomStart ? new Date(state.statsCustomStart+'T00:00:00') : new Date(now.getTime()-6*86400000);
+    end = state.statsCustomEnd ? new Date(state.statsCustomEnd+'T23:59:59') : now;
+  } else { start = new Date(now); start.setHours(0,0,0,0); end = now; }
+  return {start, end};
+}
+function statsBodyHtml(){
+  const chips = [
+    {k:'week', label:'7 วันล่าสุด'}, {k:'month', label:'30 วันล่าสุด'}, {k:'year', label:'12 เดือนล่าสุด'}, {k:'custom', label:'กำหนดเอง'}
+  ];
+  const chipsHtml = chips.map(c=>`<button class="chip ${state.statsRange===c.k?'active':''}" data-statsrange="${c.k}">${c.label}</button>`).join('');
+  const customBox = state.statsRange==='custom' ? `<div class="custom-range-box">
+    <input type="date" id="stats-start" value="${state.statsCustomStart||''}">
+    <span style="color:var(--text-muted);font-size:12px">ถึง</span>
+    <input type="date" id="stats-end" value="${state.statsCustomEnd||''}">
+    <button class="btn btn-primary" style="padding:8px 14px" id="stats-apply">แสดง</button>
+  </div>` : '';
+  const {start,end} = statsRangeDates();
+  const inRange = state.orders.filter(o=>o.createdAt>=start.getTime() && o.createdAt<=end.getTime());
+  const totalRevenue = inRange.reduce((a,o)=>a+(o.total||0),0);
+  const totalOrders = inRange.length;
+  return `${chipsHtml ? `<div class="stats-range">${chipsHtml}</div>` : ''}
+  ${customBox}
+  <div class="summary-bar">
+    <div class="sum-card"><div class="n">฿${fmt(totalRevenue)}</div><div class="l">ยอดขายรวม</div></div>
+    <div class="sum-card"><div class="n">${totalOrders}</div><div class="l">จำนวนออเดอร์</div></div>
+  </div>
+  <div class="chart-card"><h3>ยอดขาย</h3>${inRange.length? '<canvas id="chart-sales"></canvas>' : '<div class="chart-empty">ไม่มีข้อมูลในช่วงนี้</div>'}</div>
+  <div class="chart-card"><h3>เมนูที่สั่งบ่อย</h3>${inRange.length? '<canvas id="chart-items"></canvas>' : '<div class="chart-empty">ไม่มีข้อมูลในช่วงนี้</div>'}</div>
+  <div class="chart-card"><h3>ช่วงเวลาที่มีออเดอร์เยอะ</h3>${inRange.length? '<canvas id="chart-hours"></canvas>' : '<div class="chart-empty">ไม่มีข้อมูลในช่วงนี้</div>'}</div>`;
+}
+let _chartSales=null, _chartItems=null, _chartHours=null;
+function renderStatsCharts(){
+  if(typeof Chart==='undefined') return;
+  const {start,end} = statsRangeDates();
+  const inRange = state.orders.filter(o=>o.createdAt>=start.getTime() && o.createdAt<=end.getTime());
+  if(!inRange.length) return;
+  const isLongRange = state.statsRange==='year';
+  const salesMap = {};
+  inRange.forEach(o=>{
+    const key = isLongRange ? o.createdAt : o.createdAt;
+    const d = new Date(o.createdAt);
+    const label = isLongRange ? d.toLocaleDateString('th-TH',{month:'short',year:'2-digit'}) : dateStr(o.createdAt);
+    salesMap[label] = (salesMap[label]||0) + (o.total||0);
+  });
+  const salesLabels = Object.keys(salesMap);
+  const salesData = salesLabels.map(l=>salesMap[l]);
+
+  const itemMap = {};
+  inRange.forEach(o=>{ (o.items||[]).forEach(it=>{ itemMap[it.name] = (itemMap[it.name]||0) + (it.qty||0); }); });
+  const itemEntries = Object.keys(itemMap).map(k=>[k,itemMap[k]]).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+  const hourMap = new Array(24).fill(0);
+  inRange.forEach(o=>{ const h = new Date(o.createdAt).getHours(); hourMap[h]++; });
+  const hourLabels = hourMap.map((_,i)=>i+':00');
+
+  const gridColor = 'rgba(156,143,126,0.15)';
+  const textColor = '#9C8F7E';
+  const primary = '#FF8A1E';
+
+  const salesCanvas = document.getElementById('chart-sales');
+  if(salesCanvas){
+    if(_chartSales) _chartSales.destroy();
+    _chartSales = new Chart(salesCanvas, {
+      type:'line',
+      data:{ labels:salesLabels, datasets:[{ label:'ยอดขาย (บาท)', data:salesData, borderColor:primary, backgroundColor:'rgba(255,138,30,0.12)', fill:true, tension:0.3, pointRadius:3 }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{ x:{ grid:{color:gridColor}, ticks:{color:textColor,font:{size:10}} }, y:{ grid:{color:gridColor}, ticks:{color:textColor,font:{size:10}} } } }
+    });
+  }
+  const itemsCanvas = document.getElementById('chart-items');
+  if(itemsCanvas){
+    if(_chartItems) _chartItems.destroy();
+    _chartItems = new Chart(itemsCanvas, {
+      type:'bar',
+      data:{ labels:itemEntries.map(e=>e[0]), datasets:[{ label:'จำนวนที่สั่ง', data:itemEntries.map(e=>e[1]), backgroundColor:primary, borderRadius:6 }] },
+      options:{ indexAxis:'y', responsive:true, plugins:{legend:{display:false}}, scales:{ x:{ grid:{color:gridColor}, ticks:{color:textColor,font:{size:10}} }, y:{ grid:{display:false}, ticks:{color:textColor,font:{size:11}} } } }
+    });
+  }
+  const hoursCanvas = document.getElementById('chart-hours');
+  if(hoursCanvas){
+    if(_chartHours) _chartHours.destroy();
+    _chartHours = new Chart(hoursCanvas, {
+      type:'bar',
+      data:{ labels:hourLabels, datasets:[{ label:'จำนวนออเดอร์', data:hourMap, backgroundColor:'#7CB491', borderRadius:5 }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{ x:{ grid:{display:false}, ticks:{color:textColor,font:{size:9}, maxRotation:0} }, y:{ grid:{color:gridColor}, ticks:{color:textColor,font:{size:10},stepSize:1} } } }
+    });
+  }
+}
 function modifierGroupEditorHtml(g, gi){
   const optsHtml = g.options.map((o,oi)=>`
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
@@ -781,6 +896,17 @@ function ownerItemEditorScreen(){
   return `${topbar(d.id?'แก้ไขเมนู':'เพิ่มเมนูใหม่','','owner-dashboard')}
   <div class="screen">
     <div class="stack">
+      <div class="form-field">
+        <label>รูปเมนู (ไม่บังคับ)</label>
+        <div style="display:flex;align-items:center;gap:12px">
+          <div class="img-preview">${d.image ? `<img src="${d.image}">` : I.dish}</div>
+          <div class="stack" style="flex:1;gap:8px">
+            <label class="btn btn-ghost" style="text-align:center;cursor:pointer;display:block" for="edit-image-input">${d.image?'เปลี่ยนรูปภาพ':'เลือกรูปภาพ'}</label>
+            <input type="file" id="edit-image-input" accept="image/*" style="display:none">
+            ${d.image ? `<button class="btn-link" style="color:var(--danger)" id="remove-image-btn">ลบรูปภาพ</button>` : ''}
+          </div>
+        </div>
+      </div>
       <div class="form-field"><label>ชื่อเมนู</label><input id="edit-name" value="${escapeAttr(d.name)}" placeholder="เช่น กระเพราหมูสับ"></div>
       <div class="form-field"><label>หมวดหมู่</label><input id="edit-category" list="cat-list" value="${escapeAttr(d.category)}" placeholder="เช่น จานหลัก"><datalist id="cat-list">${existingCats.map(c=>`<option value="${escapeAttr(c)}">`).join('')}</datalist></div>
       <div class="form-field"><label>ราคาเริ่มต้น (บาท)</label><input id="edit-baseprice" type="number" value="${d.basePrice}" placeholder="0"></div>
@@ -794,6 +920,28 @@ function ownerItemEditorScreen(){
       ${d.id ? `<button class="btn-link" style="color:var(--danger)" id="delete-item-btn">ลบเมนูนี้</button>` : ''}
     </div>
   </div>`;
+}
+function readAndResizeImage(file, callback){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const maxW = 480;
+      const scale = Math.min(1, maxW/img.width);
+      const w = Math.round(img.width*scale) || 1;
+      const h = Math.round(img.height*scale) || 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img,0,0,w,h);
+      let dataUrl;
+      try{ dataUrl = canvas.toDataURL('image/jpeg',0.72); }catch(err){ dataUrl = e.target.result; }
+      callback(dataUrl);
+    };
+    img.onerror = ()=>{ callback(e.target.result); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 function syncEditDraftFromDOM(){
   const d = state.editDraft; if(!d) return;
@@ -972,13 +1120,22 @@ function attachEvents(){
     }
   }));
   document.querySelectorAll('[data-tab]').forEach(el=>el.addEventListener('click', ()=>{ state.ownerTab = el.getAttribute('data-tab'); render(); }));
+  document.querySelectorAll('[data-statsrange]').forEach(el=>el.addEventListener('click', ()=>{
+    state.statsRange = el.getAttribute('data-statsrange'); render();
+  }));
+  const statsApplyBtn = document.getElementById('stats-apply');
+  if(statsApplyBtn) statsApplyBtn.addEventListener('click', ()=>{
+    const s = document.getElementById('stats-start'); const en = document.getElementById('stats-end');
+    state.statsCustomStart = s ? s.value : ''; state.statsCustomEnd = en ? en.value : '';
+    render();
+  });
   document.querySelectorAll('[data-delmenu]').forEach(el=>el.addEventListener('click', ()=>{
     if(!confirm('ลบเมนูนี้ใช่ไหม?')) return;
     state.menu = state.menu.filter(m=>m.id!==el.getAttribute('data-delmenu')); saveMenu(state.menu); render();
   }));
   const addItemBtn = document.getElementById('add-item-btn');
   if(addItemBtn) addItemBtn.addEventListener('click', ()=>{
-    state.editDraft = {id:null, name:'', category:'', basePrice:0, note:'', modifierGroups:[]};
+    state.editDraft = {id:null, name:'', category:'', basePrice:0, note:'', image:'', modifierGroups:[]};
     goto('owner-item-editor');
   });
   document.querySelectorAll('[data-editmenu]').forEach(el=>el.addEventListener('click', ()=>{
@@ -986,8 +1143,25 @@ function attachEvents(){
     if(!item) return;
     state.editDraft = JSON.parse(JSON.stringify(item));
     if(!state.editDraft.modifierGroups) state.editDraft.modifierGroups = [];
+    if(!state.editDraft.image) state.editDraft.image = '';
     goto('owner-item-editor');
   }));
+  const imgInput = document.getElementById('edit-image-input');
+  if(imgInput) imgInput.addEventListener('change', (e)=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    syncEditDraftFromDOM();
+    readAndResizeImage(file, dataUrl=>{
+      state.editDraft.image = dataUrl;
+      render();
+    });
+  });
+  const removeImageBtn = document.getElementById('remove-image-btn');
+  if(removeImageBtn) removeImageBtn.addEventListener('click', ()=>{
+    syncEditDraftFromDOM();
+    state.editDraft.image = '';
+    render();
+  });
   const addGroupBtn = document.getElementById('add-group-btn');
   if(addGroupBtn) addGroupBtn.addEventListener('click', ()=>{
     syncEditDraftFromDOM();
@@ -1024,6 +1198,7 @@ function attachEvents(){
       category: (d.category||'').trim() || 'อื่นๆ',
       basePrice: parseFloat(d.basePrice)||0,
       note: (d.note||'').trim(),
+      image: d.image || '',
       modifierGroups: d.modifierGroups
         .map(g=>({
           id: 'g_'+Math.random().toString(36).slice(2,8),
