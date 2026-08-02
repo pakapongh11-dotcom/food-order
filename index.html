@@ -228,6 +228,8 @@
 </style>
 </head>
 <body>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
 <div id="app"></div>
 <script>
 /* หมายเหตุ: เวอร์ชันนี้ใช้ localStorage ของเบราว์เซอร์ ข้อมูลไม่แชร์ข้ามอุปกรณ์ — สำหรับทดสอบ/เดโม */
@@ -245,14 +247,35 @@ const I = {
   trash: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   chef: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M6 21h12M8 21V13M16 21V13M6 13c0-3 1-5 2-6a4 4 0 018 0c1 1 2 3 2 6H6z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   person: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.7"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-  lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 11V7a4 4 0 018 0v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>'
+  lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 11V7a4 4 0 018 0v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+  edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  ticket: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none"><path d="M3 8a2 2 0 012-2h14a2 2 0 012 2v2a2 2 0 000 4v2a2 2 0 01-2 2H5a2 2 0 01-2-2v-2a2 2 0 000-4V8z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>'
 };
 const DEFAULT_OWNER_PIN = '1234';
-function getOwnerPin(){ try{ return (localStorage.getItem('owner_pin') || DEFAULT_OWNER_PIN).trim(); }catch(e){ return DEFAULT_OWNER_PIN; } }
+let ownerPinCache = DEFAULT_OWNER_PIN;
+function getOwnerPin(){ return ownerPinCache; }
 function toAsciiDigits(s){
   const th = '๐๑๒๓๔๕๖๗๘๙';
   return String(s).replace(/[๐-๙]/g, d => String(th.indexOf(d)));
 }
+function escapeAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* ---- Firebase (ฐานข้อมูลกลาง ใช้ร่วมกันทุกอุปกรณ์) ---- */
+const firebaseConfig = {
+  apiKey: "AIzaSyBPP4OUyDvaq-McQBO9KPypue1iGkj3sf0",
+  authDomain: "food-order-23ed1.firebaseapp.com",
+  databaseURL: "https://food-order-23ed1-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "food-order-23ed1",
+  storageBucket: "food-order-23ed1.firebasestorage.app",
+  messagingSenderId: "470827273112",
+  appId: "1:470827273112:web:bf71f632c4da633c1eb9ed"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const menuRef = db.ref('menu');
+const ordersRef = db.ref('orders');
+const settingsRef = db.ref('settings');
+const queueRef = db.ref('queueCounter');
 
 const M = 'เพิ่มนมสด';
 const DEFAULT_MENU = [
@@ -332,48 +355,58 @@ const DEFAULT_MENU = [
   {id:'coconutjelly2', name:'วุ้นมะพร้าวนมสด', category:'ของหวาน', basePrice:25, modifierGroups:[]},
   {id:'chaokuay3', name:'เฉาก๊วยวุ้นมะพร้าวนมสด (อัพไซส์)', category:'ของหวาน', basePrice:35, modifierGroups:[]}
 ];
-const TABLE_COUNT = 6;
 
 let state = {
-  view:'landing', table:null, cartLines:[], menu:[], orders:[], loading:true,
-  ownerTab:'pending', toast:null, knownPendingIds:new Set(), firstOwnerLoad:true,
+  view:'landing', cartLines:[], menu:[], orders:[], loading:true,
+  ownerTab:'pending', toast:null, knownPendingIds:new Set(), firstOrdersLoad:true,
   menuSearch:'', activeCategory:null,
-  detailItemId:null, detailSelections:{}, detailQty:1
+  detailItemId:null, detailSelections:{}, detailQty:1,
+  editDraft:null,
+  lastQueueNumber:null, lastAheadCount:0,
+  submittingOrder:false
 };
-let pollTimer = null;
 
-const MENU_KEY = 'menu_v3';
-function loadMenu(){
-  try{
-    const raw = localStorage.getItem(MENU_KEY);
-    if(!raw) throw 0;
-    const parsed = JSON.parse(raw);
-    if(!Array.isArray(parsed) || parsed.length===0 || typeof parsed[0].basePrice !== 'number') throw 0;
-    return parsed;
-  }catch(e){
-    try{ localStorage.setItem(MENU_KEY, JSON.stringify(DEFAULT_MENU)); }catch(e2){}
-    return DEFAULT_MENU.slice();
-  }
+function saveMenu(menu){
+  const obj = {};
+  menu.forEach(item=>{ obj[item.id]=item; });
+  menuRef.set(obj);
 }
-function saveMenu(menu){ try{ localStorage.setItem(MENU_KEY, JSON.stringify(menu)); }catch(e){} }
-function fetchOrders(){
-  try{
-    const orders = [];
-    for(let i=0;i<localStorage.length;i++){
-      const key = localStorage.key(i);
-      if(key && key.indexOf('order:')===0){ try{ orders.push(JSON.parse(localStorage.getItem(key))); }catch(e){} }
-    }
-    orders.sort((a,b)=>a.createdAt-b.createdAt);
-    return orders;
-  }catch(e){ return []; }
-}
-function saveOrder(order){ try{ localStorage.setItem('order:'+order.id, JSON.stringify(order)); return true; }catch(e){ return false; } }
+function saveOrder(order){ ordersRef.child(order.id).set(order); }
 
 function fmt(n){ return Number(n).toLocaleString('th-TH'); }
 function timeAgo(ts){ const s=Math.floor((Date.now()-ts)/1000); if(s<60) return 'เมื่อสักครู่'; return Math.floor(s/60)+' นาทีที่แล้ว'; }
 function timeStr(ts){ return new Date(ts).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); }
 function dateStr(ts){ return new Date(ts).toLocaleDateString('th-TH',{day:'numeric',month:'short'}); }
-function pendingCountForTable(){ return state.orders.filter(o=>o.table===state.table && o.status==='pending').length; }
+
+/* ---- ระบบคิว ---- */
+function getNextQueueNumber(callback){
+  const today = dateStr(Date.now());
+  queueRef.transaction(current=>{
+    if(!current || current.date!==today){ return {date:today, counter:1}; }
+    return {date:today, counter:(current.counter||0)+1};
+  }).then(result=>{
+    const val = result.committed ? result.snapshot.val() : null;
+    callback(val ? val.counter : (Date.now()%100000));
+  }).catch(()=>{ callback(Date.now()%100000); });
+}
+function addMyOrderId(id){
+  try{
+    const arr = JSON.parse(localStorage.getItem('my_order_ids')||'[]');
+    arr.push(id);
+    localStorage.setItem('my_order_ids', JSON.stringify(arr));
+  }catch(e){}
+}
+function getMyOrderIds(){
+  try{ return JSON.parse(localStorage.getItem('my_order_ids')||'[]'); }catch(e){ return []; }
+}
+function aheadCount(order){
+  return state.orders.filter(o=>o.status==='pending' && typeof o.queueNumber==='number' && typeof order.queueNumber==='number'
+    && o.queueNumber < order.queueNumber && dateStr(o.createdAt)===dateStr(order.createdAt)).length;
+}
+function pendingCountForMe(){
+  const mine = getMyOrderIds();
+  return state.orders.filter(o=>mine.includes(o.id) && o.status==='pending').length;
+}
 
 function cartCount(){ return state.cartLines.reduce((a,l)=>a+l.qty,0); }
 function cartTotal(){ return state.cartLines.reduce((a,l)=>a+l.unitPrice*l.qty,0); }
@@ -399,7 +432,6 @@ function screenHTML(){
   if(state.loading) return `<div class="center-stack"><div style="color:var(--text-muted)">กำลังโหลด...</div></div>`;
   switch(state.view){
     case 'landing': return landingScreen();
-    case 'customer-table': return tableScreen();
     case 'customer-menu': return menuScreen();
     case 'item-detail': return itemDetailScreen();
     case 'customer-review': return reviewScreen();
@@ -407,6 +439,7 @@ function screenHTML(){
     case 'customer-my-orders': return myOrdersScreen();
     case 'owner-pin': return ownerPinScreen();
     case 'owner-dashboard': return ownerScreen();
+    case 'owner-item-editor': return ownerItemEditorScreen();
     default: return landingScreen();
   }
 }
@@ -427,7 +460,7 @@ function landingScreen(){
     <button class="role-card" data-role="customer">
       <div class="icon-wrap">${I.person}</div>
       <div class="label">ลูกค้า</div>
-      <div class="desc">สั่งอาหารจากโต๊ะของคุณ</div>
+      <div class="desc">สั่งอาหารแล้วรับหมายเลขคิว</div>
     </button>
     <button class="role-card" data-role="owner">
       <div class="icon-wrap">${I.chef}</div>
@@ -450,12 +483,6 @@ function ownerPinScreen(){
       ${state.pinResetNotice ? `<div style="color:var(--success);font-size:12.5px">รีเซ็ตรหัสผ่านเป็นค่าเริ่มต้นแล้ว</div>` : ''}
     </div>
   </div>`;
-}
-function tableScreen(){
-  let btns = '';
-  for(let i=1;i<=TABLE_COUNT;i++){ btns += `<button class="table-btn" data-table="${i}"><div class="num">${i}</div><div class="lbl">โต๊ะ</div></button>`; }
-  return `${topbar('เลือกโต๊ะของคุณ','แตะเลขโต๊ะที่คุณนั่ง','landing')}
-  <div class="screen"><div class="table-grid">${btns}</div></div>`;
 }
 function menuScreen(){
   const q = (state.menuSearch||'').trim().toLowerCase();
@@ -507,8 +534,8 @@ function menuScreen(){
       html += `</div></div>`;
     });
   }
-  const count = cartCount(); const total = cartTotal(); const pending = pendingCountForTable();
-  return `${topbar('เมนูอาหาร','โต๊ะ '+state.table,'customer-table')}
+  const count = cartCount(); const total = cartTotal(); const pending = pendingCountForMe();
+  return `${topbar('เมนูอาหาร','เลือกเมนูที่ต้องการ','landing')}
   <div class="screen">
     <div class="search-wrap"><div class="search-box"><span class="ic">${I.search}</span><input id="menu-search" placeholder="ค้นหาเมนู..." value="${state.menuSearch||''}"></div></div>
     <div class="category-nav">${chips}</div>
@@ -614,7 +641,7 @@ function reviewScreen(){
       <div class="rprice">฿${fmt(l.unitPrice*l.qty)}</div>
     </div>`;
   });
-  return `${topbar('ตรวจสอบออเดอร์','โต๊ะ '+state.table,'customer-menu')}
+  return `${topbar('ตรวจสอบออเดอร์','','customer-menu')}
   <div class="screen">
     <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px 16px">
       ${rows}
@@ -631,7 +658,11 @@ function confirmScreen(){
   return `<div class="center-stack">
     <div style="width:64px;height:64px;border-radius:50%;background:var(--success-tint);color:var(--success);display:flex;align-items:center;justify-content:center">${I.check}</div>
     <div class="display" style="font-size:20px">ส่งออเดอร์แล้ว</div>
-    <div style="color:var(--text-muted);font-size:14px">โต๊ะ ${state.table} · ทางร้านกำลังเตรียมอาหารให้คุณ</div>
+    <div style="background:var(--primary-tint);border-radius:16px;padding:16px 28px;text-align:center">
+      <div style="font-size:12.5px;color:var(--text-muted)">คิวของคุณ</div>
+      <div style="font-size:34px;font-weight:700;color:var(--primary-dark)">#${state.lastQueueNumber}</div>
+    </div>
+    <div style="color:var(--text-muted);font-size:14px">${state.lastAheadCount>0 ? `มีคิวรออยู่ก่อนหน้าอีก ${state.lastAheadCount} คิว` : 'ถึงคิวของคุณแล้ว ทางร้านกำลังเตรียมอาหารให้คุณ'}</div>
     <div class="stack" style="width:100%;margin-top:10px">
       <button class="btn btn-primary" data-go="customer-menu">สั่งเพิ่ม</button>
       <button class="btn btn-ghost" data-go="customer-my-orders">ดูสถานะออเดอร์ของฉัน</button>
@@ -645,24 +676,29 @@ function orderStepper(status){
   <div class="stepper-labels"><span>ส่งออเดอร์แล้ว</span><span>${done?'เสิร์ฟแล้ว':'กำลังเตรียม...'}</span></div>`;
 }
 function myOrdersScreen(){
-  const myOrders = state.orders.filter(o=>o.table===state.table).sort((a,b)=>b.createdAt-a.createdAt);
+  const mine = getMyOrderIds();
+  const myOrders = state.orders.filter(o=>mine.includes(o.id)).sort((a,b)=>b.createdAt-a.createdAt);
   let body = '';
   if(myOrders.length===0){
-    body = `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีออเดอร์จากโต๊ะนี้<div style="margin-top:14px"><button class="btn btn-primary" data-go="customer-menu">ไปดูเมนู</button></div></div>`;
+    body = `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีออเดอร์ของคุณ<div style="margin-top:14px"><button class="btn btn-primary" data-go="customer-menu">ไปดูเมนู</button></div></div>`;
   } else {
-    body = `<div class="stack">` + myOrders.map(o=>`
+    body = `<div class="stack">` + myOrders.map(o=>{
+      const ahead = o.status==='pending' ? aheadCount(o) : 0;
+      return `
       <div class="order-card">
-        <div class="oc-head"><div class="oc-id">#${o.id.slice(-5)} · ${timeStr(o.createdAt)}</div>
+        <div class="oc-head"><div class="oc-id">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${timeStr(o.createdAt)}</div>
         <div class="${o.status==='done'?'badge-ready':'badge-pending'}">${o.status==='done'?'เสิร์ฟแล้ว':'กำลังเตรียม'}</div></div>
         <div class="oc-items">${o.items.map(it=>`${it.qty}x ${it.name}${it.selectionsText?`<div class="oc-sel">${it.selectionsText}</div>`:''}`).join('')}</div>
         ${o.note ? `<div class="oc-note">${o.note}</div>` : ''}
+        ${o.status==='pending' ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${ahead>0?`มีคิวรออยู่ก่อนหน้าอีก ${ahead} คิว`:'ถึงคิวของคุณแล้ว'}</div>` : ''}
         <div class="oc-total"><span style="font-size:13px;color:var(--text-muted)">ยอดรวม</span><span style="color:var(--primary-dark);font-size:16px;font-weight:700">฿${fmt(o.total)}</span></div>
         ${orderStepper(o.status)}
-      </div>`).join('') + `</div>`;
+      </div>`;
+    }).join('') + `</div>`;
   }
-  return `${topbar('ออเดอร์ของฉัน','โต๊ะ '+state.table,'customer-menu')}
+  return `${topbar('ออเดอร์ของฉัน','','customer-menu')}
   <div class="screen">${body}</div>
-  ${bottomNav('customer-my-orders', pendingCountForTable())}`;
+  ${bottomNav('customer-my-orders', pendingCountForMe())}`;
 }
 function ownerScreen(){
   const pending = state.orders.filter(o=>o.status==='pending');
@@ -672,7 +708,7 @@ function ownerScreen(){
   if(state.ownerTab==='pending'){
     body = pending.length===0 ? `<div class="empty"><div class="e">${I.chef}</div>ยังไม่มีออเดอร์เข้ามา</div>` :
       `<div class="stack">` + pending.map(o=>`<div class="ticket">
-        <div class="thead"><div class="ttable">โต๊ะ ${o.table}</div><div class="tno">#${o.id.slice(-5)}</div></div>
+        <div class="thead"><div class="ttable">คิว #${o.queueNumber!=null?o.queueNumber:'-'}</div><div class="tno">#${o.id.slice(-5)}</div></div>
         <div class="titems">${o.items.map(it=>`${String(it.qty).padStart(2,' ')}x  ${it.name}${it.selectionsText?`<div class="tsel">${it.selectionsText}</div>`:''}`).join('')}</div>
         ${o.note ? `<div class="tnote">${o.note}</div>` : ''}
         <div class="tfoot"><div><div style="font-size:15px;font-weight:600">฿${fmt(o.total)}</div><div class="time">${timeStr(o.createdAt)} · ${timeAgo(o.createdAt)}</div></div>
@@ -682,21 +718,15 @@ function ownerScreen(){
     body = done.length===0 ? `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีประวัติออเดอร์</div>` :
       `<div class="summary-bar"><div class="sum-card"><div class="n">฿${fmt(todayRevenue)}</div><div class="l">ยอดวันนี้</div></div>
       <div class="sum-card"><div class="n">${done.filter(o=>dateStr(o.doneAt)===dateStr(Date.now())).length}</div><div class="l">ออเดอร์วันนี้</div></div></div>
-      <div class="stack">` + done.map(o=>`<div class="hist-row"><div><div class="t1">โต๊ะ ${o.table} · ${o.items.map(it=>it.qty+'x '+it.name).join(', ')}</div>
+      <div class="stack">` + done.map(o=>`<div class="hist-row"><div><div class="t1">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${o.items.map(it=>it.qty+'x '+it.name).join(', ')}</div>
       <div class="t2">${dateStr(o.doneAt)} ${timeStr(o.doneAt)}</div></div><div class="amt">฿${fmt(o.total)}</div></div>`).join('') + `</div>`;
   } else if(state.ownerTab==='menu'){
     body = `<div class="stack">` + state.menu.map(m=>`<div class="mi-row">
-      <div class="nm">${m.name}<div style="font-size:11px;color:var(--text-muted)">${m.category}</div></div>
+      <div class="nm">${m.name}<div style="font-size:11px;color:var(--text-muted)">${m.category}${m.modifierGroups&&m.modifierGroups.length?(' · '+m.modifierGroups.length+' กลุ่มตัวเลือก'):''}</div></div>
       <div class="pr">฿${fmt(m.basePrice||0)}</div>
+      <button class="icon-btn" data-editmenu="${m.id}">${I.edit}</button>
       <button class="del" data-delmenu="${m.id}">${I.trash}</button></div>`).join('') + `</div>
-      <div style="margin-top:20px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px">
-      <div style="font-size:14px;font-weight:600;margin-bottom:12px">เพิ่มเมนูใหม่ (แบบไม่มีตัวเลือกซ้อน)</div>
-      <div class="stack">
-        <div class="form-field"><label>ชื่อเมนู</label><input id="mi-name" placeholder="เช่น ข้าวผัดปู"></div>
-        <div class="form-field"><label>ราคา (บาท)</label><input id="mi-price" type="number" placeholder="60"></div>
-        <div class="form-field"><label>หมวดหมู่</label><input id="mi-cat" placeholder="เช่น จานหลัก"></div>
-        <button class="btn btn-primary" id="mi-add">เพิ่มเมนู</button>
-      </div></div>`;
+      <button class="btn btn-primary" style="width:100%;margin-top:18px" id="add-item-btn">+ เพิ่มเมนูใหม่</button>`;
   } else if(state.ownerTab==='settings'){
     body = `<div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px">
       <div style="font-size:14px;font-weight:600;margin-bottom:4px">เปลี่ยนรหัสผ่านร้านค้า</div>
@@ -720,6 +750,68 @@ function ownerScreen(){
   </div>
   ${state.toast ? `<div class="toast">${state.toast}</div>` : ''}`;
 }
+
+/* ---- ตัวแก้ไขเมนู (เพิ่ม/แก้ไข) ---- */
+function modifierGroupEditorHtml(g, gi){
+  const optsHtml = g.options.map((o,oi)=>`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <input data-opt-label="${gi}-${oi}" value="${escapeAttr(o.label)}" placeholder="ชื่อตัวเลือก เช่น หมู" style="flex:1;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font-size:14px;font-family:inherit">
+      <input data-opt-price="${gi}-${oi}" type="number" value="${o.price}" placeholder="0" style="width:76px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font-size:14px;font-family:inherit">
+      <button class="icon-btn" style="color:var(--danger)" data-removeopt="${gi}-${oi}">${I.trash}</button>
+    </div>`).join('');
+  return `<div style="background:var(--surface-2);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
+      <input data-group-label="${gi}" value="${escapeAttr(g.label)}" placeholder="ชื่อกลุ่มตัวเลือก เช่น เลือกเนื้อ" style="flex:1;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 10px;font-size:14px;font-weight:500;font-family:inherit">
+      <button class="icon-btn" style="color:var(--danger)" data-removegroup="${gi}">${I.trash}</button>
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:10px;font-size:13px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:5px"><input type="radio" name="grouptype-${gi}" value="single" ${g.type==='single'?'checked':''} data-grouptype="${gi}"> เลือกได้ 1 อย่าง</label>
+      <label style="display:flex;align-items:center;gap:5px"><input type="radio" name="grouptype-${gi}" value="multi" ${g.type==='multi'?'checked':''} data-grouptype="${gi}"> เลือกได้หลายอย่าง</label>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:12px"><input type="checkbox" data-group-required="${gi}" ${g.required?'checked':''}> บังคับให้ลูกค้าต้องเลือก</label>
+    ${optsHtml}
+    <button class="btn-link" data-addopt="${gi}" style="padding:4px 0">+ เพิ่มตัวเลือกย่อย</button>
+  </div>`;
+}
+function ownerItemEditorScreen(){
+  const d = state.editDraft;
+  if(!d) return ownerScreen();
+  const existingCats = state.menu.reduce((a,m)=>{ if(!a.includes(m.category)) a.push(m.category); return a; },[]);
+  const groupsHtml = d.modifierGroups.map((g,gi)=>modifierGroupEditorHtml(g,gi)).join('');
+  return `${topbar(d.id?'แก้ไขเมนู':'เพิ่มเมนูใหม่','','owner-dashboard')}
+  <div class="screen">
+    <div class="stack">
+      <div class="form-field"><label>ชื่อเมนู</label><input id="edit-name" value="${escapeAttr(d.name)}" placeholder="เช่น กระเพราหมูสับ"></div>
+      <div class="form-field"><label>หมวดหมู่</label><input id="edit-category" list="cat-list" value="${escapeAttr(d.category)}" placeholder="เช่น จานหลัก"><datalist id="cat-list">${existingCats.map(c=>`<option value="${escapeAttr(c)}">`).join('')}</datalist></div>
+      <div class="form-field"><label>ราคาเริ่มต้น (บาท)</label><input id="edit-baseprice" type="number" value="${d.basePrice}" placeholder="0"></div>
+      <div class="form-field"><label>หมายเหตุ (โชว์ใต้ชื่อเมนูให้ลูกค้าเห็น ไม่บังคับ)</label><textarea id="edit-note" rows="2" placeholder="เช่น แจ้งพนักงานถ้าต้องการเผ็ดพิเศษ">${escapeAttr(d.note||'')}</textarea></div>
+    </div>
+    <div style="margin-top:22px;margin-bottom:10px;font-size:14px;font-weight:600">กลุ่มตัวเลือกเพิ่มเติม (ไม่บังคับ)</div>
+    ${groupsHtml}
+    <button class="btn btn-ghost" style="width:100%" id="add-group-btn">+ เพิ่มกลุ่มตัวเลือกใหม่</button>
+    <div class="stack" style="margin-top:24px;padding-bottom:20px">
+      <button class="btn btn-primary" id="save-item-btn">บันทึกเมนู</button>
+      ${d.id ? `<button class="btn-link" style="color:var(--danger)" id="delete-item-btn">ลบเมนูนี้</button>` : ''}
+    </div>
+  </div>`;
+}
+function syncEditDraftFromDOM(){
+  const d = state.editDraft; if(!d) return;
+  const nameEl = document.getElementById('edit-name'); if(nameEl) d.name = nameEl.value;
+  const catEl = document.getElementById('edit-category'); if(catEl) d.category = catEl.value;
+  const priceEl = document.getElementById('edit-baseprice'); if(priceEl) d.basePrice = priceEl.value;
+  const noteEl = document.getElementById('edit-note'); if(noteEl) d.note = noteEl.value;
+  d.modifierGroups.forEach((g,gi)=>{
+    const lbl = document.querySelector(`[data-group-label="${gi}"]`); if(lbl) g.label = lbl.value;
+    const typeChecked = document.querySelector(`input[name="grouptype-${gi}"]:checked`); if(typeChecked) g.type = typeChecked.value;
+    const req = document.querySelector(`[data-group-required="${gi}"]`); if(req) g.required = req.checked;
+    g.options.forEach((o,oi)=>{
+      const lo = document.querySelector(`[data-opt-label="${gi}-${oi}"]`); if(lo) o.label = lo.value;
+      const po = document.querySelector(`[data-opt-price="${gi}-${oi}"]`); if(po) o.price = po.value;
+    });
+  });
+}
+
 function beep(){
   try{
     const ctx = new (window.AudioContext||window.webkitAudioContext)();
@@ -731,19 +823,23 @@ function beep(){
     osc.start(); osc.stop(ctx.currentTime+0.4);
   }catch(e){}
 }
-function refreshOrders(silent){
-  const orders = fetchOrders();
-  const pendingIds = new Set(orders.filter(o=>o.status==='pending').map(o=>o.id));
-  if(!state.firstOwnerLoad){
-    let hasNew = false;
-    pendingIds.forEach(id=>{ if(!state.knownPendingIds.has(id)) hasNew = true; });
-    if(hasNew && silent) beep();
-  }
-  state.knownPendingIds = pendingIds; state.firstOwnerLoad = false; state.orders = orders;
-  render();
+function subscribeOrders(){
+  ordersRef.on('value', snap=>{
+    const val = snap.val() || {};
+    const orders = Object.keys(val).map(k=>val[k]);
+    orders.sort((a,b)=>a.createdAt-b.createdAt);
+    const pendingIds = new Set(orders.filter(o=>o.status==='pending').map(o=>o.id));
+    if(!state.firstOrdersLoad && state.view==='owner-dashboard'){
+      let hasNew = false;
+      pendingIds.forEach(id=>{ if(!state.knownPendingIds.has(id)) hasNew = true; });
+      if(hasNew) beep();
+    }
+    state.knownPendingIds = pendingIds;
+    state.firstOrdersLoad = false;
+    state.orders = orders;
+    render();
+  });
 }
-function startPolling(silentBeep){ stopPolling(); refreshOrders(silentBeep); pollTimer = setInterval(()=>refreshOrders(silentBeep), 4000); }
-function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
 function goto(view){ state.view = view; window.scrollTo(0,0); render(); }
 
 function openDetail(id){
@@ -766,8 +862,10 @@ function addDetailToCart(){
 function attachEvents(){
   document.querySelectorAll('[data-role]').forEach(el=>el.addEventListener('click', ()=>{
     const role = el.getAttribute('data-role');
-    if(role==='customer'){ goto('customer-table'); }
-    else { state.pinError=null; goto('owner-pin'); }
+    if(role==='customer'){
+      state.cartLines = [];
+      goto('customer-menu');
+    } else { state.pinError=null; goto('owner-pin'); }
   }));
   document.querySelectorAll('[data-back]').forEach(el=>el.addEventListener('click', ()=>{ goto(el.getAttribute('data-back')); }));
   const pinInput = document.getElementById('owner-pin-input');
@@ -775,8 +873,8 @@ function attachEvents(){
   function tryOwnerLogin(){
     const val = toAsciiDigits((pinInput && pinInput.value || '').trim());
     if(val && val === getOwnerPin()){
-      state.pinError = null; state.firstOwnerLoad = true;
-      goto('owner-dashboard'); startPolling(true);
+      state.pinError = null;
+      goto('owner-dashboard');
     } else {
       state.pinError = 'รหัสผ่านไม่ถูกต้อง ลองใหม่อีกครั้ง'; render();
       const el = document.getElementById('owner-pin-input'); if(el) el.focus();
@@ -787,10 +885,6 @@ function attachEvents(){
     pinInput.focus();
     pinInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') tryOwnerLogin(); });
   }
-  document.querySelectorAll('[data-table]').forEach(el=>el.addEventListener('click', ()=>{
-    state.table = el.getAttribute('data-table'); state.cartLines = []; state.orders = fetchOrders();
-    goto('customer-menu'); startPolling(false);
-  }));
   document.querySelectorAll('[data-nav]').forEach(el=>el.addEventListener('click', ()=>goto(el.getAttribute('data-nav'))));
   document.querySelectorAll('[data-catjump]').forEach(el=>el.addEventListener('click', ()=>{
     const cat = el.getAttribute('data-catjump'); state.activeCategory = cat; render();
@@ -849,37 +943,111 @@ function attachEvents(){
   document.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click', ()=>{
     const go = el.getAttribute('data-go');
     if(go==='confirm-order'){
-      const noteVal = (document.getElementById('order-note')||{}).value || '';
-      const order = {
-        id: Date.now()+'-'+Math.random().toString(36).slice(2,7), table: state.table,
-        items: state.cartLines.map(l=>({name:l.name, selectionsText:l.selectionsText, unitPrice:l.unitPrice, qty:l.qty})),
-        total: cartTotal(), status:'pending', createdAt: Date.now(), doneAt:null, note: noteVal.trim()
-      };
+      if(state.submittingOrder) return;
+      state.submittingOrder = true;
       el.style.opacity='0.6';
-      saveOrder(order); state.cartLines=[]; state.orderNoteDraft=''; state.orders = fetchOrders();
-      goto('customer-confirm');
-    } else if(go==='landing'){ stopPolling(); goto(go); }
+      const noteVal = (document.getElementById('order-note')||{}).value || '';
+      const lines = state.cartLines.slice();
+      const total = cartTotal();
+      getNextQueueNumber((qNum)=>{
+        const order = {
+          id: Date.now()+'-'+Math.random().toString(36).slice(2,7), queueNumber: qNum,
+          items: lines.map(l=>({name:l.name, selectionsText:l.selectionsText, unitPrice:l.unitPrice, qty:l.qty})),
+          total: total, status:'pending', createdAt: Date.now(), doneAt:null, note: noteVal.trim()
+        };
+        saveOrder(order); addMyOrderId(order.id);
+        state.lastQueueNumber = qNum; state.lastAheadCount = aheadCount(order);
+        state.cartLines=[]; state.orderNoteDraft=''; state.submittingOrder=false;
+        goto('customer-confirm');
+      });
+    } else if(go==='landing'){ goto(go); }
     else { goto(go); }
   }));
   document.querySelectorAll('[data-done]').forEach(el=>el.addEventListener('click', ()=>{
     const id = el.getAttribute('data-done'); const order = state.orders.find(o=>o.id===id);
     if(order){ order.status='done'; order.doneAt=Date.now(); el.textContent='...'; saveOrder(order);
-      state.toast='ทำเครื่องหมายเสร็จแล้ว'; refreshOrders(false);
+      state.toast='ทำเครื่องหมายเสร็จแล้ว';
+      render();
       setTimeout(()=>{ state.toast=null; render(); }, 1800);
     }
   }));
   document.querySelectorAll('[data-tab]').forEach(el=>el.addEventListener('click', ()=>{ state.ownerTab = el.getAttribute('data-tab'); render(); }));
   document.querySelectorAll('[data-delmenu]').forEach(el=>el.addEventListener('click', ()=>{
+    if(!confirm('ลบเมนูนี้ใช่ไหม?')) return;
     state.menu = state.menu.filter(m=>m.id!==el.getAttribute('data-delmenu')); saveMenu(state.menu); render();
   }));
-  const addBtn = document.getElementById('mi-add');
-  if(addBtn) addBtn.addEventListener('click', ()=>{
-    const name = document.getElementById('mi-name').value.trim();
-    const price = parseFloat(document.getElementById('mi-price').value);
-    const cat = document.getElementById('mi-cat').value.trim() || 'อื่นๆ';
-    if(!name || !price) return;
-    state.menu.push({id:Date.now()+'', name, basePrice:price, category:cat, modifierGroups:[]});
-    saveMenu(state.menu); render();
+  const addItemBtn = document.getElementById('add-item-btn');
+  if(addItemBtn) addItemBtn.addEventListener('click', ()=>{
+    state.editDraft = {id:null, name:'', category:'', basePrice:0, note:'', modifierGroups:[]};
+    goto('owner-item-editor');
+  });
+  document.querySelectorAll('[data-editmenu]').forEach(el=>el.addEventListener('click', ()=>{
+    const item = state.menu.find(m=>m.id===el.getAttribute('data-editmenu'));
+    if(!item) return;
+    state.editDraft = JSON.parse(JSON.stringify(item));
+    if(!state.editDraft.modifierGroups) state.editDraft.modifierGroups = [];
+    goto('owner-item-editor');
+  }));
+  const addGroupBtn = document.getElementById('add-group-btn');
+  if(addGroupBtn) addGroupBtn.addEventListener('click', ()=>{
+    syncEditDraftFromDOM();
+    state.editDraft.modifierGroups.push({label:'', type:'single', required:false, options:[{label:'', price:0}]});
+    render();
+  });
+  document.querySelectorAll('[data-removegroup]').forEach(el=>el.addEventListener('click', ()=>{
+    syncEditDraftFromDOM();
+    const gi = parseInt(el.getAttribute('data-removegroup'),10);
+    state.editDraft.modifierGroups.splice(gi,1);
+    render();
+  }));
+  document.querySelectorAll('[data-addopt]').forEach(el=>el.addEventListener('click', ()=>{
+    syncEditDraftFromDOM();
+    const gi = parseInt(el.getAttribute('data-addopt'),10);
+    state.editDraft.modifierGroups[gi].options.push({label:'', price:0});
+    render();
+  }));
+  document.querySelectorAll('[data-removeopt]').forEach(el=>el.addEventListener('click', ()=>{
+    syncEditDraftFromDOM();
+    const [gi,oi] = el.getAttribute('data-removeopt').split('-').map(Number);
+    state.editDraft.modifierGroups[gi].options.splice(oi,1);
+    render();
+  }));
+  const saveItemBtn = document.getElementById('save-item-btn');
+  if(saveItemBtn) saveItemBtn.addEventListener('click', ()=>{
+    syncEditDraftFromDOM();
+    const d = state.editDraft;
+    const name = (d.name||'').trim();
+    if(!name){ state.toast='กรุณาใส่ชื่อเมนู'; render(); setTimeout(()=>{state.toast=null;render();},2000); return; }
+    const item = {
+      id: d.id || ('item_'+Date.now()),
+      name: name,
+      category: (d.category||'').trim() || 'อื่นๆ',
+      basePrice: parseFloat(d.basePrice)||0,
+      note: (d.note||'').trim(),
+      modifierGroups: d.modifierGroups
+        .map(g=>({
+          id: 'g_'+Math.random().toString(36).slice(2,8),
+          label: (g.label||'').trim(),
+          type: g.type==='multi'?'multi':'single',
+          required: !!g.required,
+          options: g.options.filter(o=>(o.label||'').trim()).map(o=>({id:'o_'+Math.random().toString(36).slice(2,8), label:(o.label||'').trim(), price:parseFloat(o.price)||0}))
+        }))
+        .filter(g=>g.label && g.options.length>0)
+    };
+    const idx = state.menu.findIndex(m=>m.id===item.id);
+    if(idx>=0) state.menu[idx]=item; else state.menu.push(item);
+    saveMenu(state.menu);
+    state.editDraft = null; state.ownerTab='menu';
+    goto('owner-dashboard');
+    state.toast='บันทึกเมนูแล้ว'; render(); setTimeout(()=>{state.toast=null;render();},1800);
+  });
+  const deleteItemBtn = document.getElementById('delete-item-btn');
+  if(deleteItemBtn) deleteItemBtn.addEventListener('click', ()=>{
+    if(!confirm('ลบเมนูนี้ใช่ไหม?')) return;
+    state.menu = state.menu.filter(m=>m.id!==state.editDraft.id);
+    saveMenu(state.menu);
+    state.editDraft = null; state.ownerTab='menu';
+    goto('owner-dashboard');
   });
   const savePinBtn = document.getElementById('save-pin');
   if(savePinBtn) savePinBtn.addEventListener('click', ()=>{
@@ -887,7 +1055,8 @@ function attachEvents(){
     const p2 = (document.getElementById('confirm-pin').value||'').trim();
     if(!p1 || p1.length<4){ state.toast='รหัสผ่านต้องมีอย่างน้อย 4 หลัก'; render(); setTimeout(()=>{state.toast=null;render();},2000); return; }
     if(p1!==p2){ state.toast='รหัสผ่านทั้งสองช่องไม่ตรงกัน'; render(); setTimeout(()=>{state.toast=null;render();},2000); return; }
-    localStorage.setItem('owner_pin', p1);
+    settingsRef.child('ownerPin').set(p1);
+    ownerPinCache = p1;
     state.toast='บันทึกรหัสผ่านใหม่แล้ว'; render(); setTimeout(()=>{state.toast=null;render();},2000);
   });
 }
@@ -895,7 +1064,8 @@ function checkSecretPinReset(){
   try{
     const params = new URLSearchParams(location.search);
     if(params.get('resetpin')==='1'){
-      localStorage.removeItem('owner_pin');
+      settingsRef.child('ownerPin').remove();
+      ownerPinCache = DEFAULT_OWNER_PIN;
       params.delete('resetpin');
       const q = params.toString();
       const newUrl = location.pathname + (q?('?'+q):'') + location.hash;
@@ -904,7 +1074,27 @@ function checkSecretPinReset(){
     }
   }catch(e){}
 }
-function init(){ checkSecretPinReset(); state.menu = loadMenu(); state.loading = false; render(); }
+function init(){
+  checkSecretPinReset();
+  settingsRef.child('ownerPin').on('value', snap=>{
+    ownerPinCache = snap.exists() ? snap.val() : DEFAULT_OWNER_PIN;
+  });
+  menuRef.once('value').then(snap=>{
+    if(!snap.exists()){
+      const seed = {};
+      DEFAULT_MENU.forEach(item=>{ seed[item.id]=item; });
+      menuRef.set(seed);
+    }
+  });
+  menuRef.on('value', snap=>{
+    const val = snap.val() || {};
+    const list = Object.keys(val).map(k=>val[k]);
+    state.menu = list.length ? list : DEFAULT_MENU.slice();
+    state.loading = false;
+    render();
+  });
+  subscribeOrders();
+}
 init();
 </script>
 </body>
