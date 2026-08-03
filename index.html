@@ -236,6 +236,16 @@
   .chart-empty{ text-align:center; color:var(--text-muted); font-size:13px; padding:24px 0; }
   .img-preview{ width:72px; height:72px; border-radius:14px; overflow:hidden; background:var(--surface-2); display:flex; align-items:center; justify-content:center; flex-shrink:0; color:var(--text-muted); }
   .img-preview img{ width:100%; height:100%; object-fit:cover; }
+  .chat-list{ display:flex; flex-direction:column; gap:10px; padding-bottom:90px; }
+  .chat-msg{ max-width:78%; padding:10px 14px; border-radius:16px; font-size:14px; line-height:1.5; }
+  .chat-msg.theirs{ align-self:flex-start; background:var(--surface); border:1px solid var(--line); border-bottom-left-radius:4px; }
+  .chat-msg.mine{ align-self:flex-end; background:var(--primary); color:#fff; border-bottom-right-radius:4px; }
+  .chat-msg .ct{ font-size:10px; opacity:0.65; margin-top:4px; }
+  .chat-empty{ text-align:center; color:var(--text-muted); font-size:13px; padding:40px 0; }
+  .chat-inputbar{ position:fixed; left:0; right:0; bottom:0; max-width:480px; margin:0 auto; background:var(--surface); border-top:1px solid var(--line); padding:10px 12px; display:flex; gap:8px; align-items:center; padding-bottom:calc(10px + env(safe-area-inset-bottom,0)); }
+  .chat-inputbar input{ flex:1; background:var(--surface-2); border:1px solid var(--line); border-radius:22px; padding:11px 16px; font-size:14px; font-family:inherit; color:var(--text); }
+  .chat-inputbar button{ width:42px; height:42px; border-radius:50%; background:var(--primary); color:#fff; border:none; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  .chat-link{ display:inline-flex; align-items:center; font-size:12.5px; color:var(--primary-dark); background:var(--primary-tint); padding:6px 12px; border-radius:20px; border:none; font-weight:600; }
   .detail-qty{ display:flex; align-items:center; gap:12px; background:var(--surface-2); border-radius:12px; padding:8px 10px; }
 </style>
 </head>
@@ -262,6 +272,8 @@ const I = {
   person: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.7"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   lock: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.7"/><path d="M8 11V7a4 4 0 018 0v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
   edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  chat: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="vertical-align:-3px;margin-right:2px"><path d="M21 12a8 8 0 01-11.5 7.2L4 20l1.1-4.2A8 8 0 1121 12z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+  send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   ticket: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none"><path d="M3 8a2 2 0 012-2h14a2 2 0 012 2v2a2 2 0 000 4v2a2 2 0 01-2 2H5a2 2 0 01-2-2v-2a2 2 0 000-4V8z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>'
 };
 const DEFAULT_OWNER_PIN = '1234';
@@ -375,9 +387,10 @@ let state = {
   menuSearch:'', activeCategory:null,
   detailItemId:null, detailSelections:{}, detailQty:1,
   editDraft:null,
-  lastQueueNumber:null, lastAheadCount:0,
+  lastQueueNumber:null, lastOrderId:null,
   submittingOrder:false,
-  statsRange:'week', statsCustomStart:'', statsCustomEnd:''
+  statsRange:'week', statsCustomStart:'', statsCustomEnd:'',
+  chatOrderId:null, chatRole:null
 };
 
 function saveMenu(menu){
@@ -385,16 +398,17 @@ function saveMenu(menu){
   menu.forEach(item=>{ obj[item.id]=item; });
   menuRef.set(obj);
 }
-function saveOrder(order){ ordersRef.child(order.id).set(order); }
+function saveOrder(order){ return ordersRef.child(order.id).set(order); }
 
 function fmt(n){ return Number(n).toLocaleString('th-TH'); }
 function timeAgo(ts){ const s=Math.floor((Date.now()-ts)/1000); if(s<60) return 'เมื่อสักครู่'; return Math.floor(s/60)+' นาทีที่แล้ว'; }
 function timeStr(ts){ return new Date(ts).toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'}); }
 function dateStr(ts){ return new Date(ts).toLocaleDateString('th-TH',{day:'numeric',month:'short'}); }
+function dateKey(ts){ const d = new Date(ts); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 
 /* ---- ระบบคิว ---- */
 function getNextQueueNumber(callback){
-  const today = dateStr(Date.now());
+  const today = dateKey(Date.now());
   queueRef.transaction(current=>{
     if(!current || current.date!==today){ return {date:today, counter:1}; }
     return {date:today, counter:(current.counter||0)+1};
@@ -405,8 +419,9 @@ function getNextQueueNumber(callback){
 }
 function addMyOrderId(id){
   try{
-    const arr = JSON.parse(localStorage.getItem('my_order_ids')||'[]');
+    let arr = JSON.parse(localStorage.getItem('my_order_ids')||'[]');
     arr.push(id);
+    if(arr.length>300) arr = arr.slice(-300);
     localStorage.setItem('my_order_ids', JSON.stringify(arr));
   }catch(e){}
 }
@@ -415,11 +430,12 @@ function getMyOrderIds(){
 }
 function aheadCount(order){
   return state.orders.filter(o=>o.status==='pending' && typeof o.queueNumber==='number' && typeof order.queueNumber==='number'
-    && o.queueNumber < order.queueNumber && dateStr(o.createdAt)===dateStr(order.createdAt)).length;
+    && o.queueNumber < order.queueNumber && dateKey(o.createdAt)===dateKey(order.createdAt)).length;
 }
 function pendingCountForMe(){
   const mine = getMyOrderIds();
-  return state.orders.filter(o=>mine.includes(o.id) && o.status==='pending').length;
+  const today = dateKey(Date.now());
+  return state.orders.filter(o=>mine.includes(o.id) && o.status==='pending' && dateKey(o.createdAt)===today).length;
 }
 
 function cartCount(){ return state.cartLines.reduce((a,l)=>a+l.qty,0); }
@@ -444,6 +460,11 @@ function render(){
   if(state.view==='owner-dashboard' && state.ownerTab==='stats'){
     renderStatsCharts();
   }
+  if(state.view==='order-chat'){
+    const list = document.getElementById('chat-list');
+    if(list) list.scrollIntoView({block:'end'});
+    window.scrollTo(0, document.body.scrollHeight);
+  }
 }
 function screenHTML(){
   if(state.loading) return `<div class="center-stack"><div style="color:var(--text-muted)">กำลังโหลด...</div></div>`;
@@ -457,6 +478,7 @@ function screenHTML(){
     case 'owner-pin': return ownerPinScreen();
     case 'owner-dashboard': return ownerScreen();
     case 'owner-item-editor': return ownerItemEditorScreen();
+    case 'order-chat': return orderChatScreen();
     default: return landingScreen();
   }
 }
@@ -507,8 +529,7 @@ function menuScreen(){
   state.menu.forEach(m=>{ if(q && !m.name.toLowerCase().includes(q)) return; (cats[m.category]=cats[m.category]||[]).push(m); });
   const catNames = Object.keys(cats);
   if(!state.activeCategory && catNames.length) state.activeCategory = catNames[0];
-  const allCats = state.menu.reduce((acc,m)=>{ if(!acc.includes(m.category)) acc.push(m.category); return acc; },[]);
-  const chips = allCats.map(cat=>`<button class="chip ${cat===state.activeCategory?'active':''}" data-catjump="${cat}">${cat}</button>`).join('');
+  const chips = catNames.map(cat=>`<button class="chip ${cat===state.activeCategory?'active':''}" data-catjump="${cat}">${cat}</button>`).join('');
 
   let html = '';
   if(catNames.length===0){ html = `<div class="no-results">ไม่พบเมนูที่ค้นหา</div>`; }
@@ -668,10 +689,24 @@ function reviewScreen(){
       <label>หมายเหตุพิเศษ (ไม่บังคับ)</label>
       <textarea id="order-note" rows="2" placeholder="เช่น ไม่ใส่ผักชี, ขอเผ็ดน้อย">${state.orderNoteDraft||''}</textarea>
     </div>
+    ${state.orderError ? `<div style="margin-top:14px;background:#FDEDE8;color:var(--danger);border-radius:12px;padding:12px 14px;font-size:13px">${state.orderError}</div>` : ''}
   </div>
   <div class="cartbar" style="bottom:18px" data-go="confirm-order"><div class="left">ยืนยันการสั่ง</div><div class="right">฿${fmt(cartTotal())}</div></div>`;
 }
 function confirmScreen(){
+  const order = state.orders.find(o=>o.id===state.lastOrderId);
+  let statusHtml;
+  if(!order){
+    statusHtml = `<div style="color:var(--text-muted);font-size:14px">กำลังอัปเดตสถานะ...</div>`;
+  } else if(order.status==='done'){
+    statusHtml = `<div style="color:var(--success);font-size:14px;font-weight:600">อาหารของคุณเสร็จแล้ว รับได้เลย!</div>`;
+  } else if(order.status==='cancelled'){
+    statusHtml = `<div style="color:var(--danger);font-size:14px;font-weight:600">ออเดอร์นี้ถูกยกเลิก กรุณาติดต่อร้านค้า</div>`;
+  } else {
+    const ahead = aheadCount(order);
+    statusHtml = `<div style="color:var(--text-muted);font-size:14px">${ahead>0 ? `มีคิวรออยู่ก่อนหน้าอีก ${ahead} คิว` : 'ถึงคิวของคุณแล้ว ทางร้านกำลังเตรียมอาหารให้คุณ'}</div>`;
+  }
+  const chatBtn = order && order.status==='pending' ? `<button class="btn-link" data-openchat="${order.id}" data-chatrole="customer">${I.chat} แชทกับร้าน${(order.messages?Object.keys(order.messages).length:0)>0 ? ` (${Object.keys(order.messages).length})` : ''}</button>` : '';
   return `<div class="center-stack">
     <div style="width:64px;height:64px;border-radius:50%;background:var(--success-tint);color:var(--success);display:flex;align-items:center;justify-content:center">${I.check}</div>
     <div class="display" style="font-size:20px">ส่งออเดอร์แล้ว</div>
@@ -679,10 +714,11 @@ function confirmScreen(){
       <div style="font-size:12.5px;color:var(--text-muted)">คิวของคุณ</div>
       <div style="font-size:34px;font-weight:700;color:var(--primary-dark)">#${state.lastQueueNumber}</div>
     </div>
-    <div style="color:var(--text-muted);font-size:14px">${state.lastAheadCount>0 ? `มีคิวรออยู่ก่อนหน้าอีก ${state.lastAheadCount} คิว` : 'ถึงคิวของคุณแล้ว ทางร้านกำลังเตรียมอาหารให้คุณ'}</div>
+    ${statusHtml}
     <div class="stack" style="width:100%;margin-top:10px">
       <button class="btn btn-primary" data-go="customer-menu">สั่งเพิ่ม</button>
       <button class="btn btn-ghost" data-go="customer-my-orders">ดูสถานะออเดอร์ของฉัน</button>
+      ${chatBtn}
       <button class="btn-link" data-go="landing">กลับหน้าแรก</button>
     </div>
   </div>`;
@@ -694,22 +730,26 @@ function orderStepper(status){
 }
 function myOrdersScreen(){
   const mine = getMyOrderIds();
-  const myOrders = state.orders.filter(o=>mine.includes(o.id)).sort((a,b)=>b.createdAt-a.createdAt);
+  const today = dateKey(Date.now());
+  const myOrders = state.orders.filter(o=>mine.includes(o.id) && dateKey(o.createdAt)===today).sort((a,b)=>b.createdAt-a.createdAt);
   let body = '';
   if(myOrders.length===0){
-    body = `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีออเดอร์ของคุณ<div style="margin-top:14px"><button class="btn btn-primary" data-go="customer-menu">ไปดูเมนู</button></div></div>`;
+    body = `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีออเดอร์ของคุณวันนี้<div style="margin-top:14px"><button class="btn btn-primary" data-go="customer-menu">ไปดูเมนู</button></div></div>`;
   } else {
     body = `<div class="stack">` + myOrders.map(o=>{
       const ahead = o.status==='pending' ? aheadCount(o) : 0;
+      const statusBadge = o.status==='done' ? `<div class="badge-ready">เสิร์ฟแล้ว</div>` : o.status==='cancelled' ? `<div class="badge-pending" style="background:#F8DCD3;color:var(--danger)">ยกเลิกแล้ว</div>` : `<div class="badge-pending">กำลังเตรียม</div>`;
+      const msgCount = o.messages ? Object.keys(o.messages).length : 0;
       return `
       <div class="order-card">
         <div class="oc-head"><div class="oc-id">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${timeStr(o.createdAt)}</div>
-        <div class="${o.status==='done'?'badge-ready':'badge-pending'}">${o.status==='done'?'เสิร์ฟแล้ว':'กำลังเตรียม'}</div></div>
+        ${statusBadge}</div>
         <div class="oc-items">${o.items.map(it=>`${it.qty}x ${it.name}${it.selectionsText?`<div class="oc-sel">${it.selectionsText}</div>`:''}`).join('')}</div>
         ${o.note ? `<div class="oc-note">${o.note}</div>` : ''}
         ${o.status==='pending' ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${ahead>0?`มีคิวรออยู่ก่อนหน้าอีก ${ahead} คิว`:'ถึงคิวของคุณแล้ว'}</div>` : ''}
         <div class="oc-total"><span style="font-size:13px;color:var(--text-muted)">ยอดรวม</span><span style="color:var(--primary-dark);font-size:16px;font-weight:700">฿${fmt(o.total)}</span></div>
-        ${orderStepper(o.status)}
+        ${o.status!=='cancelled' ? orderStepper(o.status) : ''}
+        <div style="margin-top:12px"><button class="chat-link" data-openchat="${o.id}" data-chatrole="customer">${I.chat}แชทกับร้าน${msgCount>0?` (${msgCount})`:''}</button></div>
       </div>`;
     }).join('') + `</div>`;
   }
@@ -717,27 +757,51 @@ function myOrdersScreen(){
   <div class="screen">${body}</div>
   ${bottomNav('customer-my-orders', pendingCountForMe())}`;
 }
+function orderChatScreen(){
+  const order = state.orders.find(o=>o.id===state.chatOrderId);
+  const isShop = state.chatRole==='shop';
+  const backView = isShop ? 'owner-dashboard' : 'customer-my-orders';
+  if(!order){
+    return `${topbar('แชท','', backView)}<div class="screen"><div class="chat-empty">ไม่พบออเดอร์นี้แล้ว</div></div>`;
+  }
+  const msgs = order.messages ? Object.keys(order.messages).map(k=>order.messages[k]).sort((a,b)=>a.ts-b.ts) : [];
+  const msgsHtml = msgs.length ? msgs.map(m=>{
+    const mine = isShop ? m.sender==='shop' : m.sender==='customer';
+    return `<div class="chat-msg ${mine?'mine':'theirs'}">${escapeAttr(m.text)}<div class="ct">${timeStr(m.ts)}</div></div>`;
+  }).join('') : `<div class="chat-empty">ยังไม่มีข้อความ ${isShop?'ทักทายลูกค้าได้เลย':'สอบถามร้านได้เลยครับ'}</div>`;
+  return `${topbar((isShop?'แชทกับลูกค้า · ':'แชทกับร้าน · ')+'คิว #'+(order.queueNumber!=null?order.queueNumber:'-'), '', backView)}
+  <div class="screen" style="padding-bottom:90px">
+    <div class="chat-list" id="chat-list">${msgsHtml}</div>
+  </div>
+  <div class="chat-inputbar">
+    <input id="chat-input" placeholder="พิมพ์ข้อความ..." autocomplete="off">
+    <button id="chat-send">${I.send}</button>
+  </div>`;
+}
 function ownerScreen(){
   const pending = state.orders.filter(o=>o.status==='pending');
-  const doneToday = state.orders.filter(o=>o.status==='done' && dateStr(o.doneAt)===dateStr(Date.now())).sort((a,b)=>b.doneAt-a.doneAt);
+  const doneToday = state.orders.filter(o=>o.status==='done' && dateKey(o.doneAt)===dateKey(Date.now()));
+  const cancelledToday = state.orders.filter(o=>o.status==='cancelled' && dateKey(o.doneAt)===dateKey(Date.now()));
+  const historyToday = doneToday.concat(cancelledToday).sort((a,b)=>b.doneAt-a.doneAt);
   const todayRevenue = doneToday.reduce((a,o)=>a+o.total,0);
   let body = '';
   if(state.ownerTab==='pending'){
     body = pending.length===0 ? `<div class="empty"><div class="e">${I.chef}</div>ยังไม่มีออเดอร์เข้ามา</div>` :
-      `<div class="stack">` + pending.map(o=>`<div class="ticket">
+      `<div class="stack">` + pending.map(o=>{ const msgCount = o.messages ? Object.keys(o.messages).length : 0; return `<div class="ticket">
         <div class="thead"><div class="ttable">คิว #${o.queueNumber!=null?o.queueNumber:'-'}</div><div class="tno">#${o.id.slice(-5)}</div></div>
         <div class="titems">${o.items.map(it=>`${String(it.qty).padStart(2,' ')}x  ${it.name}${it.selectionsText?`<div class="tsel">${it.selectionsText}</div>`:''}`).join('')}</div>
         ${o.note ? `<div class="tnote">${o.note}</div>` : ''}
+        <div style="margin-top:8px"><button class="chat-link" data-openchat="${o.id}" data-chatrole="shop">${I.chat}แชทกับลูกค้า${msgCount>0?` (${msgCount})`:''}</button></div>
         <div class="tfoot"><div><div style="font-size:15px;font-weight:600">฿${fmt(o.total)}</div><div class="time">${timeStr(o.createdAt)} · ${timeAgo(o.createdAt)}</div></div>
-        <button class="done-btn" data-done="${o.id}">เสร็จแล้ว</button></div>
-      </div>`).join('') + `</div>`;
+        <div style="display:flex;gap:8px"><button class="icon-btn" style="color:var(--danger);background:rgba(228,87,46,0.1);border-radius:10px;padding:9px" data-cancel="${o.id}">${I.trash}</button><button class="done-btn" data-done="${o.id}">เสร็จแล้ว</button></div></div>
+      </div>`; }).join('') + `</div>`;
   } else if(state.ownerTab==='history'){
     body = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">แสดงเฉพาะออเดอร์ของวันนี้ · ดูย้อนหลังได้ที่แท็บ "สถิติ"</div>` +
-      (doneToday.length===0 ? `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีประวัติออเดอร์วันนี้</div>` :
+      (historyToday.length===0 ? `<div class="empty"><div class="e">${I.receipt}</div>ยังไม่มีประวัติออเดอร์วันนี้</div>` :
       `<div class="summary-bar"><div class="sum-card"><div class="n">฿${fmt(todayRevenue)}</div><div class="l">ยอดวันนี้</div></div>
       <div class="sum-card"><div class="n">${doneToday.length}</div><div class="l">ออเดอร์วันนี้</div></div></div>
-      <div class="stack">` + doneToday.map(o=>`<div class="hist-row"><div><div class="t1">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${o.items.map(it=>it.qty+'x '+it.name).join(', ')}</div>
-      <div class="t2">${dateStr(o.doneAt)} ${timeStr(o.doneAt)}</div></div><div class="amt">฿${fmt(o.total)}</div></div>`).join('') + `</div>`);
+      <div class="stack">` + historyToday.map(o=>`<div class="hist-row"><div><div class="t1">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${o.items.map(it=>it.qty+'x '+it.name).join(', ')}${o.status==='cancelled'?' · <span style="color:var(--danger)">ยกเลิก</span>':''}</div>
+      <div class="t2">${dateStr(o.doneAt)} ${timeStr(o.doneAt)}</div></div><div class="amt" style="${o.status==='cancelled'?'color:var(--danger);text-decoration:line-through':''}">฿${fmt(o.total)}</div></div>`).join('') + `</div>`);
   } else if(state.ownerTab==='stats'){
     body = statsBodyHtml();
   } else if(state.ownerTab==='menu'){
@@ -785,6 +849,11 @@ function statsRangeDates(){
   } else { start = new Date(now); start.setHours(0,0,0,0); end = now; }
   return {start, end};
 }
+function statsOrdersInRange(){
+  const {start,end} = statsRangeDates();
+  const inRange = state.orders.filter(o=>o.status==='done' && o.doneAt>=start.getTime() && o.doneAt<=end.getTime());
+  return {start,end,inRange};
+}
 function statsBodyHtml(){
   const chips = [
     {k:'week', label:'7 วันล่าสุด'}, {k:'month', label:'30 วันล่าสุด'}, {k:'year', label:'12 เดือนล่าสุด'}, {k:'custom', label:'กำหนดเอง'}
@@ -796,12 +865,12 @@ function statsBodyHtml(){
     <input type="date" id="stats-end" value="${state.statsCustomEnd||''}">
     <button class="btn btn-primary" style="padding:8px 14px" id="stats-apply">แสดง</button>
   </div>` : '';
-  const {start,end} = statsRangeDates();
-  const inRange = state.orders.filter(o=>o.createdAt>=start.getTime() && o.createdAt<=end.getTime());
+  const {inRange} = statsOrdersInRange();
   const totalRevenue = inRange.reduce((a,o)=>a+(o.total||0),0);
   const totalOrders = inRange.length;
   return `${chipsHtml ? `<div class="stats-range">${chipsHtml}</div>` : ''}
   ${customBox}
+  <div style="font-size:11.5px;color:var(--text-muted);margin:-6px 0 14px">นับเฉพาะออเดอร์ที่ทำเสร็จแล้ว (ไม่รวมที่ยกเลิกหรือยังค้างอยู่)</div>
   <div class="summary-bar">
     <div class="sum-card"><div class="n">฿${fmt(totalRevenue)}</div><div class="l">ยอดขายรวม</div></div>
     <div class="sum-card"><div class="n">${totalOrders}</div><div class="l">จำนวนออเดอร์</div></div>
@@ -813,19 +882,20 @@ function statsBodyHtml(){
 let _chartSales=null, _chartItems=null, _chartHours=null;
 function renderStatsCharts(){
   if(typeof Chart==='undefined') return;
-  const {start,end} = statsRangeDates();
-  const inRange = state.orders.filter(o=>o.createdAt>=start.getTime() && o.createdAt<=end.getTime());
+  const {inRange} = statsOrdersInRange();
   if(!inRange.length) return;
   const isLongRange = state.statsRange==='year';
   const salesMap = {};
   inRange.forEach(o=>{
-    const key = isLongRange ? o.createdAt : o.createdAt;
-    const d = new Date(o.createdAt);
-    const label = isLongRange ? d.toLocaleDateString('th-TH',{month:'short',year:'2-digit'}) : dateStr(o.createdAt);
-    salesMap[label] = (salesMap[label]||0) + (o.total||0);
+    const d = new Date(o.doneAt);
+    const key = isLongRange ? (d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')) : dateKey(o.doneAt);
+    const label = isLongRange ? d.toLocaleDateString('th-TH',{month:'short',year:'2-digit'}) : dateStr(o.doneAt);
+    if(!salesMap[key]) salesMap[key] = {label, total:0};
+    salesMap[key].total += (o.total||0);
   });
-  const salesLabels = Object.keys(salesMap);
-  const salesData = salesLabels.map(l=>salesMap[l]);
+  const salesKeys = Object.keys(salesMap).sort();
+  const salesLabels = salesKeys.map(k=>salesMap[k].label);
+  const salesData = salesKeys.map(k=>salesMap[k].total);
 
   const itemMap = {};
   inRange.forEach(o=>{ (o.items||[]).forEach(it=>{ itemMap[it.name] = (itemMap[it.name]||0) + (it.qty||0); }); });
@@ -1034,6 +1104,22 @@ function attachEvents(){
     pinInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') tryOwnerLogin(); });
   }
   document.querySelectorAll('[data-nav]').forEach(el=>el.addEventListener('click', ()=>goto(el.getAttribute('data-nav'))));
+  document.querySelectorAll('[data-openchat]').forEach(el=>el.addEventListener('click', ()=>{
+    state.chatOrderId = el.getAttribute('data-openchat');
+    state.chatRole = el.getAttribute('data-chatrole');
+    goto('order-chat');
+  }));
+  const chatInput = document.getElementById('chat-input');
+  const chatSendBtn = document.getElementById('chat-send');
+  function sendChatMsg(){
+    const val = (chatInput && chatInput.value || '').trim();
+    if(!val || !state.chatOrderId) return;
+    const sender = state.chatRole==='shop' ? 'shop' : 'customer';
+    ordersRef.child(state.chatOrderId).child('messages').push({sender, text:val, ts:Date.now()});
+    if(chatInput) chatInput.value='';
+  }
+  if(chatSendBtn) chatSendBtn.addEventListener('click', sendChatMsg);
+  if(chatInput) chatInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') sendChatMsg(); });
   document.querySelectorAll('[data-catjump]').forEach(el=>el.addEventListener('click', ()=>{
     const cat = el.getAttribute('data-catjump'); state.activeCategory = cat; render();
     const t = document.getElementById('cat-'+encodeURIComponent(cat)); if(t) t.scrollIntoView({behavior:'smooth', block:'start'});
@@ -1094,6 +1180,8 @@ function attachEvents(){
       if(state.submittingOrder) return;
       state.submittingOrder = true;
       el.style.opacity='0.6';
+      state.orderError = null;
+      render();
       const noteVal = (document.getElementById('order-note')||{}).value || '';
       const lines = state.cartLines.slice();
       const total = cartTotal();
@@ -1103,18 +1191,33 @@ function attachEvents(){
           items: lines.map(l=>({name:l.name, selectionsText:l.selectionsText, unitPrice:l.unitPrice, qty:l.qty})),
           total: total, status:'pending', createdAt: Date.now(), doneAt:null, note: noteVal.trim()
         };
-        saveOrder(order); addMyOrderId(order.id);
-        state.lastQueueNumber = qNum; state.lastAheadCount = aheadCount(order);
-        state.cartLines=[]; state.orderNoteDraft=''; state.submittingOrder=false;
-        goto('customer-confirm');
+        saveOrder(order).then(()=>{
+          addMyOrderId(order.id);
+          state.lastQueueNumber = qNum; state.lastOrderId = order.id;
+          state.cartLines=[]; state.orderNoteDraft=''; state.submittingOrder=false;
+          goto('customer-confirm');
+        }).catch(()=>{
+          state.submittingOrder = false;
+          state.orderError = 'ส่งออเดอร์ไม่สำเร็จ อินเทอร์เน็ตอาจมีปัญหา กรุณาลองใหม่อีกครั้ง';
+          render();
+        });
       });
     } else if(go==='landing'){ goto(go); }
-    else { goto(go); }
+    else { if(go==='customer-review') state.orderError=null; goto(go); }
   }));
   document.querySelectorAll('[data-done]').forEach(el=>el.addEventListener('click', ()=>{
     const id = el.getAttribute('data-done'); const order = state.orders.find(o=>o.id===id);
     if(order){ order.status='done'; order.doneAt=Date.now(); el.textContent='...'; saveOrder(order);
       state.toast='ทำเครื่องหมายเสร็จแล้ว';
+      render();
+      setTimeout(()=>{ state.toast=null; render(); }, 1800);
+    }
+  }));
+  document.querySelectorAll('[data-cancel]').forEach(el=>el.addEventListener('click', ()=>{
+    const id = el.getAttribute('data-cancel'); const order = state.orders.find(o=>o.id===id);
+    if(order && confirm('ยกเลิกออเดอร์คิว #'+(order.queueNumber!=null?order.queueNumber:'-')+' ใช่ไหม?')){
+      order.status='cancelled'; order.doneAt=Date.now(); saveOrder(order);
+      state.toast='ยกเลิกออเดอร์แล้ว';
       render();
       setTimeout(()=>{ state.toast=null; render(); }, 1800);
     }
