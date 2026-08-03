@@ -101,10 +101,11 @@
     border-radius:16px; padding:12px; box-shadow:0 2px 8px rgba(43,33,24,0.05);
   }
   .menu-item .thumb{
-    width:52px; height:52px; border-radius:13px; background:var(--primary-tint); color:var(--primary); flex-shrink:0;
+    width:72px; height:72px; border-radius:16px; background:var(--primary-tint); color:var(--primary); flex-shrink:0;
     display:flex; align-items:center; justify-content:center; overflow:hidden;
   }
   .menu-item .thumb img{ width:100%; height:100%; object-fit:cover; }
+  .menu-item .thumb svg{ width:30px; height:30px; }
   .menu-item .info{ flex:1; min-width:0; }
   .menu-item .name{ font-size:14.5px; font-weight:500; line-height:1.4; }
   .menu-item .price{ font-size:13px; color:var(--primary-dark); margin-top:3px; font-weight:600; }
@@ -298,6 +299,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const menuRef = db.ref('menu');
+const categoriesRef = db.ref('categories');
 const ordersRef = db.ref('orders');
 const settingsRef = db.ref('settings');
 const queueRef = db.ref('queueCounter');
@@ -390,6 +392,7 @@ let state = {
   lastQueueNumber:null, lastOrderId:null,
   submittingOrder:false,
   statsRange:'week', statsCustomStart:'', statsCustomEnd:'',
+  categories:[],
   chatOrderId:null, chatRole:null
 };
 
@@ -398,6 +401,7 @@ function saveMenu(menu){
   menu.forEach(item=>{ obj[item.id]=item; });
   menuRef.set(obj);
 }
+function saveCategories(list){ state.categories = list; categoriesRef.set(list); }
 function saveOrder(order){ return ordersRef.child(order.id).set(order); }
 
 function fmt(n){ return Number(n).toLocaleString('th-TH'); }
@@ -494,19 +498,16 @@ function topbar(title, sub, backView){
 function landingScreen(){
   return `
   <div class="center-stack">
-    <div class="display" style="font-size:23px">สั่งอาหารร้าน</div>
+    <div class="display" style="font-size:23px">สั่งอาหาร</div>
     <div style="color:var(--text-muted); font-size:14px; margin-top:-10px">เลือกว่าคุณคือใคร</div>
     <button class="role-card" data-role="customer">
       <div class="icon-wrap">${I.person}</div>
       <div class="label">ลูกค้า</div>
-      <div class="desc">สั่งอาหารแล้วรับหมายเลขคิว</div>
     </button>
     <button class="role-card" data-role="owner">
       <div class="icon-wrap">${I.chef}</div>
       <div class="label">ร้านค้า</div>
-      <div class="desc">ดูออเดอร์ที่เข้ามา</div>
     </button>
-    <div class="hint">เดโมนี้บันทึกข้อมูลในเบราว์เซอร์นี้เท่านั้น</div>
   </div>`;
 }
 function ownerPinScreen(){
@@ -527,7 +528,13 @@ function menuScreen(){
   const q = (state.menuSearch||'').trim().toLowerCase();
   const cats = {};
   state.menu.forEach(m=>{ if(q && !m.name.toLowerCase().includes(q)) return; (cats[m.category]=cats[m.category]||[]).push(m); });
-  const catNames = Object.keys(cats);
+  const catNames = Object.keys(cats).sort((a,b)=>{
+    const ia = state.categories.indexOf(a); const ib = state.categories.indexOf(b);
+    if(ia===-1 && ib===-1) return 0;
+    if(ia===-1) return 1;
+    if(ib===-1) return -1;
+    return ia-ib;
+  });
   if(!state.activeCategory && catNames.length) state.activeCategory = catNames[0];
   const chips = catNames.map(cat=>`<button class="chip ${cat===state.activeCategory?'active':''}" data-catjump="${cat}">${cat}</button>`).join('');
 
@@ -554,6 +561,11 @@ function menuScreen(){
           </div>`;
         } else {
           const qty = state.cartLines[simpleLineIndex(item.id)] ? state.cartLines[simpleLineIndex(item.id)].qty : 0;
+          const ctrl = qty>0 ? `<div class="qty-ctrl">
+              <button class="qty-btn" data-dec="${item.id}">${I.minus}</button>
+              <div class="qty-num">${qty}</div>
+              <button class="qty-btn" data-inc="${item.id}">${I.plus}</button>
+            </div>` : `<button class="add-btn" data-inc="${item.id}">${I.plus}</button>`;
           html += `<div class="menu-item">
             <div class="thumb">${thumb}</div>
             <div class="info">
@@ -561,11 +573,7 @@ function menuScreen(){
               <div class="price">฿${fmt(item.basePrice)}</div>
               ${item.note ? `<div class="price" style="color:var(--text-muted);font-weight:400">${item.note}</div>` : ''}
             </div>
-            <div class="qty-ctrl">
-              <button class="qty-btn" data-dec="${item.id}">${I.minus}</button>
-              <div class="qty-num">${qty}</div>
-              <button class="qty-btn" data-inc="${item.id}">${I.plus}</button>
-            </div>
+            ${ctrl}
           </div>`;
         }
       });
@@ -742,14 +750,17 @@ function myOrdersScreen(){
       const msgCount = o.messages ? Object.keys(o.messages).length : 0;
       return `
       <div class="order-card">
-        <div class="oc-head"><div class="oc-id">คิว #${o.queueNumber!=null?o.queueNumber:'-'} · ${timeStr(o.createdAt)}</div>
+        <div class="oc-head"><div class="oc-id">${timeStr(o.createdAt)}</div>
         ${statusBadge}</div>
         <div class="oc-items">${o.items.map(it=>`${it.qty}x ${it.name}${it.selectionsText?`<div class="oc-sel">${it.selectionsText}</div>`:''}`).join('')}</div>
         ${o.note ? `<div class="oc-note">${o.note}</div>` : ''}
         ${o.status==='pending' ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${ahead>0?`มีคิวรออยู่ก่อนหน้าอีก ${ahead} คิว`:'ถึงคิวของคุณแล้ว'}</div>` : ''}
         <div class="oc-total"><span style="font-size:13px;color:var(--text-muted)">ยอดรวม</span><span style="color:var(--primary-dark);font-size:16px;font-weight:700">฿${fmt(o.total)}</span></div>
         ${o.status!=='cancelled' ? orderStepper(o.status) : ''}
-        <div style="margin-top:12px"><button class="chat-link" data-openchat="${o.id}" data-chatrole="customer">${I.chat}แชทกับร้าน${msgCount>0?` (${msgCount})`:''}</button></div>
+        <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="chat-link" data-openchat="${o.id}" data-chatrole="customer">${I.chat}แชทกับร้าน${msgCount>0?` (${msgCount})`:''}</button>
+          ${o.status==='pending' ? `<button class="chat-link" style="background:#FDEDE8;color:var(--danger)" data-customercancel="${o.id}">ยกเลิกออเดอร์</button>` : ''}
+        </div>
       </div>`;
     }).join('') + `</div>`;
   }
@@ -805,7 +816,19 @@ function ownerScreen(){
   } else if(state.ownerTab==='stats'){
     body = statsBodyHtml();
   } else if(state.ownerTab==='menu'){
-    body = `<div class="stack">` + state.menu.map(m=>`<div class="mi-row">
+    const catMgmtHtml = `<div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:18px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:12px">จัดการหมวดหมู่ (เรียงลำดับ/แก้ชื่อ/ลบ)</div>
+      <div class="stack">${state.categories.map((c,i)=>`
+        <div style="display:flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:8px 10px">
+          <div style="flex:1;font-size:13.5px">${c}</div>
+          <button class="icon-btn" style="${i===0?'opacity:0.3':''}" data-catmoveup="${i}">▲</button>
+          <button class="icon-btn" style="${i===state.categories.length-1?'opacity:0.3':''}" data-catmovedown="${i}">▼</button>
+          <button class="icon-btn" data-catrename="${i}">${I.edit}</button>
+          <button class="icon-btn" style="color:var(--danger)" data-catdelete="${i}">${I.trash}</button>
+        </div>`).join('')}</div>
+      <button class="btn btn-ghost" style="width:100%;margin-top:10px" id="add-category-btn">+ เพิ่มหมวดหมู่ใหม่</button>
+    </div>`;
+    body = catMgmtHtml + `<div class="stack">` + state.menu.map(m=>`<div class="mi-row">
       <div class="nm">${m.name}<div style="font-size:11px;color:var(--text-muted)">${m.category}${m.modifierGroups&&m.modifierGroups.length?(' · '+m.modifierGroups.length+' กลุ่มตัวเลือก'):''}</div></div>
       <div class="pr">฿${fmt(m.basePrice||0)}</div>
       <button class="icon-btn" data-editmenu="${m.id}">${I.edit}</button>
@@ -913,9 +936,9 @@ function renderStatsCharts(){
   if(salesCanvas){
     if(_chartSales) _chartSales.destroy();
     _chartSales = new Chart(salesCanvas, {
-      type:'line',
-      data:{ labels:salesLabels, datasets:[{ label:'ยอดขาย (บาท)', data:salesData, borderColor:primary, backgroundColor:'rgba(255,138,30,0.12)', fill:true, tension:0.3, pointRadius:3 }] },
-      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{ x:{ grid:{color:gridColor}, ticks:{color:textColor,font:{size:10}} }, y:{ grid:{color:gridColor}, ticks:{color:textColor,font:{size:10}} } } }
+      type:'bar',
+      data:{ labels:salesLabels, datasets:[{ label:'ยอดขาย (บาท)', data:salesData, backgroundColor:primary, borderRadius:6 }] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{ x:{ grid:{display:false}, ticks:{color:textColor,font:{size:10}} }, y:{ grid:{color:gridColor}, ticks:{color:textColor,font:{size:10}} } } }
     });
   }
   const itemsCanvas = document.getElementById('chart-items');
@@ -1222,6 +1245,15 @@ function attachEvents(){
       setTimeout(()=>{ state.toast=null; render(); }, 1800);
     }
   }));
+  document.querySelectorAll('[data-customercancel]').forEach(el=>el.addEventListener('click', ()=>{
+    const id = el.getAttribute('data-customercancel'); const order = state.orders.find(o=>o.id===id);
+    if(order && confirm('ยกเลิกออเดอร์นี้ใช่ไหม?')){
+      order.status='cancelled'; order.doneAt=Date.now(); saveOrder(order);
+      state.toast='ยกเลิกออเดอร์แล้ว';
+      render();
+      setTimeout(()=>{ state.toast=null; render(); }, 1800);
+    }
+  }));
   document.querySelectorAll('[data-tab]').forEach(el=>el.addEventListener('click', ()=>{ state.ownerTab = el.getAttribute('data-tab'); render(); }));
   document.querySelectorAll('[data-statsrange]').forEach(el=>el.addEventListener('click', ()=>{
     state.statsRange = el.getAttribute('data-statsrange'); render();
@@ -1235,6 +1267,56 @@ function attachEvents(){
   document.querySelectorAll('[data-delmenu]').forEach(el=>el.addEventListener('click', ()=>{
     if(!confirm('ลบเมนูนี้ใช่ไหม?')) return;
     state.menu = state.menu.filter(m=>m.id!==el.getAttribute('data-delmenu')); saveMenu(state.menu); render();
+  }));
+  const addCategoryBtn = document.getElementById('add-category-btn');
+  if(addCategoryBtn) addCategoryBtn.addEventListener('click', ()=>{
+    const name = (prompt('ชื่อหมวดหมู่ใหม่')||'').trim();
+    if(!name) return;
+    if(state.categories.includes(name)){ state.toast='มีหมวดหมู่นี้อยู่แล้ว'; render(); setTimeout(()=>{state.toast=null;render();},2000); return; }
+    saveCategories(state.categories.concat([name]));
+    render();
+  });
+  document.querySelectorAll('[data-catmoveup]').forEach(el=>el.addEventListener('click', ()=>{
+    const i = parseInt(el.getAttribute('data-catmoveup'),10);
+    if(i<=0) return;
+    const arr = state.categories.slice();
+    [arr[i-1],arr[i]] = [arr[i],arr[i-1]];
+    saveCategories(arr); render();
+  }));
+  document.querySelectorAll('[data-catmovedown]').forEach(el=>el.addEventListener('click', ()=>{
+    const i = parseInt(el.getAttribute('data-catmovedown'),10);
+    if(i>=state.categories.length-1) return;
+    const arr = state.categories.slice();
+    [arr[i],arr[i+1]] = [arr[i+1],arr[i]];
+    saveCategories(arr); render();
+  }));
+  document.querySelectorAll('[data-catrename]').forEach(el=>el.addEventListener('click', ()=>{
+    const i = parseInt(el.getAttribute('data-catrename'),10);
+    const oldName = state.categories[i];
+    const newName = (prompt('เปลี่ยนชื่อหมวดหมู่', oldName)||'').trim();
+    if(!newName || newName===oldName) return;
+    if(state.categories.includes(newName)){ state.toast='มีหมวดหมู่ชื่อนี้อยู่แล้ว'; render(); setTimeout(()=>{state.toast=null;render();},2000); return; }
+    const arr = state.categories.slice(); arr[i] = newName;
+    state.menu.forEach(m=>{ if(m.category===oldName) m.category = newName; });
+    saveMenu(state.menu);
+    saveCategories(arr);
+    render();
+  }));
+  document.querySelectorAll('[data-catdelete]').forEach(el=>el.addEventListener('click', ()=>{
+    const i = parseInt(el.getAttribute('data-catdelete'),10);
+    const catName = state.categories[i];
+    const affected = state.menu.filter(m=>m.category===catName).length;
+    const msg = affected>0 ? `หมวดหมู่ "${catName}" มีเมนูอยู่ ${affected} รายการ ถ้าลบ เมนูเหล่านี้จะย้ายไปหมวด "อื่นๆ" ต้องการลบใช่ไหม?` : `ลบหมวดหมู่ "${catName}" ใช่ไหม?`;
+    if(!confirm(msg)) return;
+    let arr = state.categories.slice();
+    arr.splice(i,1);
+    if(affected>0){
+      state.menu.forEach(m=>{ if(m.category===catName) m.category = 'อื่นๆ'; });
+      saveMenu(state.menu);
+      if(!arr.includes('อื่นๆ')) arr.push('อื่นๆ');
+    }
+    saveCategories(arr);
+    render();
   }));
   const addItemBtn = document.getElementById('add-item-btn');
   if(addItemBtn) addItemBtn.addEventListener('click', ()=>{
@@ -1315,6 +1397,9 @@ function attachEvents(){
     const idx = state.menu.findIndex(m=>m.id===item.id);
     if(idx>=0) state.menu[idx]=item; else state.menu.push(item);
     saveMenu(state.menu);
+    if(!state.categories.includes(item.category)){
+      saveCategories(state.categories.concat([item.category]));
+    }
     state.editDraft = null; state.ownerTab='menu';
     goto('owner-dashboard');
     state.toast='บันทึกเมนูแล้ว'; render(); setTimeout(()=>{state.toast=null;render();},1800);
@@ -1363,6 +1448,16 @@ function init(){
       DEFAULT_MENU.forEach(item=>{ seed[item.id]=item; });
       menuRef.set(seed);
     }
+  });
+  categoriesRef.once('value').then(snap=>{
+    if(!snap.exists()){
+      const seed = DEFAULT_MENU.reduce((acc,m)=>{ if(!acc.includes(m.category)) acc.push(m.category); return acc; },[]);
+      categoriesRef.set(seed);
+    }
+  });
+  categoriesRef.on('value', snap=>{
+    state.categories = snap.val() || [];
+    render();
   });
   menuRef.on('value', snap=>{
     const val = snap.val() || {};
